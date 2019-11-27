@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
+import os
+os.putenv('TF_CUDNN_USE_AUTOTUNE', '0')
+# Disable numpy deprecation messages
+import warnings
+warnings.simplefilter('ignore', category=DeprecationWarning)
+warnings.simplefilter('ignore', category=FutureWarning)
+# Disable tensorflow deprecation messages
+import tensorflow as tf
+import tensorflow.python.util.deprecation as deprecation
+tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
+deprecation._PRINT_DEPRECATION_WARNINGS = False
 
 import argparse
 import json
-import os
 import numpy as np
-import tensorflow as tf
 
 import model, sample, encoder
 
@@ -33,7 +42,9 @@ def main():
     if args.length > hparams.n_ctx:
         raise ValueError("Can't get samples longer than window size: %s" % hparams.n_ctx)
 
-    with tf.Session(graph=tf.Graph()) as sess:
+    config = tf.ConfigProto()
+    config.gpu_options.allow_growth = True
+    with tf.Session(config=config) as sess:
         context = tf.placeholder(tf.int32, [batch_size, None])
         output = sample.sample_sequence(
             hparams=hparams, length=args.length,
@@ -45,7 +56,7 @@ def main():
         saver = tf.train.Saver()
         ckpt = tf.train.latest_checkpoint(os.path.join('models', args.model_name))
         if args.checkpoint:
-            ckpt = tf.train.latest_checkpoint(args.checkpoint)
+            ckpt = tf.train.latest_checkpoint(args.checkpoint) or args.checkpoint
         saver.restore(sess, ckpt)
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -54,7 +65,6 @@ def main():
                 print(self.headers)
                 length = int(self.headers['Content-Length'])
                 raw_text = self.rfile.read(length).decode('utf-8')
-                print(repr(raw_text))
                 context_tokens = enc.encode(raw_text)
                 context_size = min(len(context_tokens), hparams.n_ctx - args.length - 1)
                 context_tokens = context_tokens[-context_size:]
@@ -67,7 +77,22 @@ def main():
                     context: [context_tokens]
                 })[0, context_size:]
                 text = enc.decode(out)
+                print(repr(raw_text), repr(text))
                 self.wfile.write(json.dumps({'text': [text], 'context': enc.decode(context_tokens)}).encode('utf-8'))
+            def do_GET(self):
+                print('GET', self.path)
+                if self.path == '/info':
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json; charset=UTF-8')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    info = {'model': args.model_name,
+                            'checkpoint': ckpt}
+                    self.wfile.write(json.dumps(info).encode('utf-8'))
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+
         server_address = ('', 8000)
         httpd = http.server.HTTPServer(server_address, Handler)
 

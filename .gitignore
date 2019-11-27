@@ -5,3 +5,8 @@ checkpoint
 samples
 dist-newstyle
 bin
+*.hi
+*.o
+ircbot
+/env
+context.txt
