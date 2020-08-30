@@ -6,7 +6,7 @@ import warnings
 warnings.simplefilter('ignore', category=DeprecationWarning)
 warnings.simplefilter('ignore', category=FutureWarning)
 # Disable tensorflow deprecation messages
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 import tensorflow.python.util.deprecation as deprecation
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 deprecation._PRINT_DEPRECATION_WARNINGS = False
@@ -34,7 +34,7 @@ def main():
     batch_size = 1
     nsamples = 1
 
-    enc = encoder.get_encoder(args.model_name)
+    enc = encoder.get_encoder(args.model_name, models_dir='models')
     hparams = model.default_hparams()
     with open(os.path.join('models', args.model_name, 'hparams.json')) as f:
         hparams.override_from_dict(json.load(f))
@@ -62,23 +62,48 @@ def main():
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_POST(self):
                 print('POST', self.path)
-                print(self.headers)
-                length = int(self.headers['Content-Length'])
-                raw_text = self.rfile.read(length).decode('utf-8')
-                context_tokens = enc.encode(raw_text)
-                context_size = min(len(context_tokens), hparams.n_ctx - args.length - 1)
-                context_tokens = context_tokens[-context_size:]
+                if self.path == '/predict':
+                    print(self.headers)
+                    length = int(self.headers['Content-Length'])
+                    raw_text = self.rfile.read(length).decode('utf-8')
+                    context_tokens = enc.encode(raw_text)
+                    context_size = min(len(context_tokens), hparams.n_ctx - args.length - 1)
+                    context_tokens = context_tokens[-context_size:]
 
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json; charset=UTF-8')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                out = sess.run(output, feed_dict={
-                    context: [context_tokens]
-                })[0, context_size:]
-                text = enc.decode(out)
-                print(repr(raw_text), repr(text))
-                self.wfile.write(json.dumps({'text': [text], 'context': enc.decode(context_tokens)}).encode('utf-8'))
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json; charset=UTF-8')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    out = sess.run(output, feed_dict={
+                        context: [context_tokens]
+                    })[0, context_size:]
+                    text = enc.decode(out)
+                    print(repr(raw_text), repr(text))
+                    self.wfile.write(json.dumps({'text': [text], 'context': enc.decode(context_tokens)}).encode('utf-8'))
+                if self.path == '/predicts':
+                    print(self.headers)
+                    length = int(self.headers['Content-Length'])
+                    raw_text = self.rfile.read(length).decode('utf-8')
+                    config = json.loads(raw_text)
+                    raw_text = config['prompt']
+                    num_samples = config['num_samples']
+                    context_tokens = enc.encode(raw_text)
+                    context_size = min(len(context_tokens), hparams.n_ctx - args.length - 1)
+                    context_tokens = context_tokens[-context_size:]
+
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json; charset=UTF-8')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    text_list = []
+                    for _ in range(num_samples):
+                        out = sess.run(output, feed_dict={
+                            context: [context_tokens]
+                        })[0, context_size:]
+                        text = enc.decode(out)
+                        text_list.append(text)
+                        print(repr(raw_text), repr(text))
+                    self.wfile.write(json.dumps({'text': text_list, 'context': enc.decode(context_tokens)}).encode('utf-8'))
             def do_GET(self):
                 print('GET', self.path)
                 if self.path == '/info':
