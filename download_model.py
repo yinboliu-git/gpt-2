@@ -4,7 +4,7 @@ import requests
 from tqdm import tqdm
 
 if len(sys.argv) != 2:
-    print('You must enter the model name as a parameter, e.g.: download_model.py 117M')
+    print('You must enter the model name as a parameter, e.g.: download_model.py 124M')
     sys.exit(1)
 
 model = sys.argv[1]
@@ -16,7 +16,7 @@ subdir = subdir.replace('\\','/') # needed for Windows
 
 for filename in ['checkpoint','encoder.json','hparams.json','model.ckpt.data-00000-of-00001', 'model.ckpt.index', 'model.ckpt.meta', 'vocab.bpe']:
 
-    r = requests.get("https://storage.googleapis.com/gpt-2/" + subdir + "/" + filename, stream=True)
+    r = requests.get("https://openaipublic.blob.core.windows.net/gpt-2/" + subdir + "/" + filename, stream=True)
 
     with open(os.path.join(subdir, filename), 'wb') as f:
         file_size = int(r.headers["content-length"])
