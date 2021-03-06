@@ -1,7 +1,7 @@
 import glob
 import numpy as np
 import os
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 import tqdm
 
 

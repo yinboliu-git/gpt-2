@@ -6,15 +6,17 @@ import argparse
 import json
 import os
 import numpy as np
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 import time
 import tqdm
 from tensorflow.core.protobuf import rewriter_config_pb2
 
+if tf.VERSION >= '2':
+    tf.disable_eager_execution()
+
 import model, sample, encoder
 from load_dataset import load_dataset, Sampler
 from accumulate import AccumulatingOptimizer
-import memory_saving_gradients
 
 CHECKPOINT_DIR = 'checkpoint'
 SAMPLE_DIR = 'samples'
@@ -81,11 +83,6 @@ def main():
         raise ValueError(
             "Can't get samples longer than window size: %s" % hparams.n_ctx)
 
-    if args.model_name == '345M':
-        args.memory_saving_gradients = True
-        if args.optimizer == 'adam':
-            args.only_train_transformer_layers = True
-
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True
     config.graph_options.rewrite_options.layout_optimizer = rewriter_config_pb2.RewriterConfig.OFF
@@ -137,6 +134,9 @@ def main():
             summary_loss = tf.summary.scalar('loss', opt_apply)
         else:
             if args.memory_saving_gradients:
+                if tf.VERSION >= '2':
+                    exit('Memory saving gradients are not supported in tensorflow 2.x')
+                import memory_saving_gradients
                 opt_grads = memory_saving_gradients.gradients(loss, train_vars)
             else:
                 opt_grads = tf.gradients(loss, train_vars)

@@ -4,7 +4,7 @@ import fire
 import json
 import os
 import numpy as np
-import tensorflow as tf
+import tensorflow.compat.v1 as tf
 
 import model, sample, encoder
 
@@ -77,4 +77,3 @@ def sample_model(
 
 if __name__ == '__main__':
     fire.Fire(sample_model)
-
