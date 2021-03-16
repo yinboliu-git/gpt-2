@@ -4,19 +4,29 @@
 
 import argparse
 import json
-import os
+import os, sys
 import numpy as np
 import tensorflow.compat.v1 as tf
+import tensorflow as tf2
 import time
 import tqdm
-from tensorflow.core.protobuf import rewriter_config_pb2
 
 if tf.VERSION >= '2':
     tf.disable_eager_execution()
+    tf.config.experimental.enable_tensor_float_32_execution(False)
+    tf.config.optimizer.set_experimental_options({'layout_optimizer': False,
+                                                  'constant_folding': False,
+                                                  'shape_optimization': False,
+                                                  'remapping': False,
+                                                  'arithmetic_optimization': False,
+                                                  'dependency_optimization': False,
+                                                  'loop_optimization': False,
+                                                  'disable_meta_optimizer': True
+                                                  })
+
 
 import model, sample, encoder
 from load_dataset import load_dataset, Sampler
-from accumulate import AccumulatingOptimizer
 
 CHECKPOINT_DIR = 'checkpoint'
 SAMPLE_DIR = 'samples'
@@ -36,6 +46,8 @@ parser.add_argument('--batch_size', metavar='SIZE', type=int, default=1, help='B
 parser.add_argument('--learning_rate', metavar='LR', type=float, default=0.00002, help='Learning rate for Adam')
 parser.add_argument('--accumulate_gradients', metavar='N', type=int, default=1, help='Accumulate gradients across N minibatches.')
 parser.add_argument('--memory_saving_gradients', default=False, action='store_true', help='Use gradient checkpointing to reduce vram usage.')
+parser.add_argument('--twremat', default=False, action='store_true', help='Use tensor rematerialization (better than memory_saving_gradients and works with tensorflow 2.0).')
+parser.add_argument('--twremat_memlimit', type=str, default='12G', help='Memory usage limit/target for twremat. Can be an integer, or an integer suffixed with K/M/G for kilo/mega/giga-bytes.')
 parser.add_argument('--only_train_transformer_layers', default=False, action='store_true', help='Restrict training to the transformer blocks.')
 parser.add_argument('--optimizer', type=str, default='adam', help='Optimizer. <adam|sgd>.')
 parser.add_argument('--noise', type=float, default=0.0, help='Add noise to input training data to regularize against typos.')
@@ -83,16 +95,15 @@ def main():
         raise ValueError(
             "Can't get samples longer than window size: %s" % hparams.n_ctx)
 
-    config = tf.ConfigProto()
-    config.gpu_options.allow_growth = True
-    config.graph_options.rewrite_options.layout_optimizer = rewriter_config_pb2.RewriterConfig.OFF
-    with tf.Session(config=config) as sess:
-        context = tf.placeholder(tf.int32, [args.batch_size, None])
-        context_in = randomize(context, hparams, args.noise)
-        output = model.model(hparams=hparams, X=context_in)
-        loss = tf.reduce_mean(
+    with tf.Session() as sess:
+        # Fully static shape required to make memory accounting in
+        # twremat accurate.
+        train_context = tf.placeholder(tf.int32, [args.batch_size, 1024])
+        train_context_in = randomize(train_context, hparams, args.noise)
+        train_output = model.model(hparams=hparams, X=train_context_in)
+        train_loss = tf.reduce_mean(
             tf.nn.sparse_softmax_cross_entropy_with_logits(
-                labels=context[:, 1:], logits=output['logits'][:, :-1]))
+                labels=train_context[:, 1:], logits=train_output['logits'][:, :-1]))
 
         if args.val_every > 0:
             val_context = tf.placeholder(tf.int32, [args.val_batch_size, None])
@@ -102,11 +113,11 @@ def main():
                     labels=val_context[:, 1:], logits=val_output['logits'][:, :-1]))
             val_loss_summary = tf.summary.scalar('val_loss', val_loss)
 
-
+        sample_context = tf.placeholder(tf.int32, [args.batch_size, None])
         tf_sample = sample.sample_sequence(
             hparams=hparams,
             length=args.sample_length,
-            context=context,
+            context=sample_context,
             batch_size=args.batch_size,
             temperature=1.0,
             top_k=args.top_k,
@@ -116,33 +127,38 @@ def main():
         train_vars = [v for v in all_vars if '/h' in v.name] if args.only_train_transformer_layers else all_vars
 
         if args.optimizer == 'adam':
+            print('Using Adam optimizer', file=sys.stderr)
             opt = tf.train.AdamOptimizer(learning_rate=args.learning_rate)
         elif args.optimizer == 'sgd':
+            print('Using SGD optimizer', file=sys.stderr)
             opt = tf.train.GradientDescentOptimizer(learning_rate=args.learning_rate)
         else:
             exit('Bad optimizer:', args.optimizer)
 
-        if args.accumulate_gradients > 1:
-            if args.memory_saving_gradients:
-                exit("Memory saving gradients are not implemented for gradient accumulation yet.")
-            opt = AccumulatingOptimizer(
-                opt=opt,
-                var_list=train_vars)
-            opt_reset = opt.reset()
-            opt_compute = opt.compute_gradients(loss)
-            opt_apply = opt.apply_gradients()
-            summary_loss = tf.summary.scalar('loss', opt_apply)
+        if args.memory_saving_gradients:
+            if tf.VERSION >= '2':
+                exit('Memory saving gradients are not supported in tensorflow 2.x')
+            import memory_saving_gradients
+            opt_grads = memory_saving_gradients.gradients(train_loss, train_vars)
+        elif args.twremat:
+            import tfremat
+            opt_grads = tf.gradients(train_loss, train_vars)
+            (train_loss, opt_grads) = tfremat.tf_remat((train_loss, opt_grads), memlimit=args.twremat_memlimit)
         else:
-            if args.memory_saving_gradients:
-                if tf.VERSION >= '2':
-                    exit('Memory saving gradients are not supported in tensorflow 2.x')
-                import memory_saving_gradients
-                opt_grads = memory_saving_gradients.gradients(loss, train_vars)
-            else:
-                opt_grads = tf.gradients(loss, train_vars)
-            opt_grads = list(zip(opt_grads, train_vars))
-            opt_apply = opt.apply_gradients(opt_grads)
-            summary_loss = tf.summary.scalar('loss', loss)
+            opt_grads = tf.gradients(train_loss, train_vars)
+        opt_grads = list(zip(opt_grads, train_vars))
+        opt_apply = opt.apply_gradients(opt_grads)
+        summary_loss = tf.summary.scalar('loss', train_loss)
+
+        # if args.twremat:
+        #     import tfremat
+        #     # Applying tfremat to opt_apply has more accurate
+        #     # accounting but is a bit iffier since side effecting ops
+        #     # have more restrictions for correctness. If in doubt
+        #     # revert back to version using opt_grads above.
+        #     (opt_apply, train_loss, summary_loss) = (
+        #         tfremat.tf_remat((opt_apply, train_loss, summary_loss), memlimit=args.twremat_memlimit))
+
 
         summary_lr = tf.summary.scalar('learning_rate', args.learning_rate)
         summaries = tf.summary.merge([summary_lr, summary_loss])
@@ -218,7 +234,7 @@ def main():
             while index < args.sample_num:
                 out = sess.run(
                     tf_sample,
-                    feed_dict={context: args.batch_size * [context_tokens]})
+                    feed_dict={sample_context: args.batch_size * [context_tokens]})
                 for i in range(min(args.sample_num - index, args.batch_size)):
                     text = enc.decode(out[i])
                     text = '======== SAMPLE {} ========\n{}\n'.format(
@@ -255,6 +271,13 @@ def main():
         avg_loss = (0.0, 0.0)
         start_time = time.time()
 
+        # print('Evaluating grads..')
+        # tf2.profiler.experimental.start('logdir')
+        # sess.run((opt_apply, train_loss, summaries), feed_dict={train_context: sample_batch()})
+        # tf2.profiler.experimental.stop()
+        # print('Succeeded')
+        # exit()
+
         try:
             while True:
                 if counter % args.save_every == 0:
@@ -264,16 +287,9 @@ def main():
                 if args.val_every > 0 and (counter % args.val_every == 0 or counter == 1):
                     validation()
 
-                if args.accumulate_gradients > 1:
-                    sess.run(opt_reset)
-                    for _ in range(args.accumulate_gradients):
-                        sess.run(
-                            opt_compute, feed_dict={context: sample_batch()})
-                    (v_loss, v_summary) = sess.run((opt_apply, summaries))
-                else:
-                    (_, v_loss, v_summary) = sess.run(
-                        (opt_apply, loss, summaries),
-                        feed_dict={context: sample_batch()})
+                (_, v_loss, v_summary) = sess.run(
+                    (opt_apply, train_loss, summaries),
+                    feed_dict={train_context: sample_batch()})
 
                 summary_log.add_summary(v_summary, counter)
 
