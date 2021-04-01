@@ -16,13 +16,14 @@ library lib
   hs-source-dirs: src
   exposed-modules:
     Balanced Dense Filter Graph TreeWidth TWRemat Util
-  build-depends: base >= 4.12.0.0 && < 4.15.0.0, containers, mtl, psqueues, dlist, relation
+  build-depends: base >= 4.12.0.0 && < 4.16.0.0, containers, mtl, psqueues, dlist, relation
+  default-language:    Haskell2010
 
 executable twremat
   main-is:             remat.hs
   -- other-modules:       Cabbage.Config, Cabbage.Cabal, Cabbage.Parser
   -- other-extensions:
-  build-depends: base >= 4.12.0.0 && < 4.15.0.0, lib,
+  build-depends: base >= 4.12.0.0 && < 4.16.0.0, lib,
                  containers, mtl, psqueues, dlist, relation, parsers, trifecta, text
                      -- , Glob
                      -- , containers
@@ -47,6 +48,7 @@ Test-Suite testmain
   main-is:    test.hs
   hs-source-dirs: main test
   other-modules: TestBalanced TestGraph TestTreeWidth
-  build-depends: base >= 4.12.0.0 && < 4.15.0.0, lib,
+  build-depends: base >= 4.12.0.0 && < 4.16.0.0, lib,
                  containers, mtl, psqueues, dlist, relation, parsers, trifecta, text,
                  QuickCheck, tasty, tasty-quickcheck, fgl, fgl-arbitrary
+  default-language:    Haskell2010
