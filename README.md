@@ -1,5 +1,26 @@
 ## Fine tuning on custom datasets
 
+### 给代码打上了中文注释
+
+源代码没有中文注释， 以及比较少的英文注释；我这里把代码梳理了一遍，并且打上了中文的注释
+
+<br>
+
+### 使用：
+
+./src/train.py 用于微调
+
+./src/interactive_conditional_samples.py 可以用于 “输入一句话”--> "输出一句话"的实现
+
+
+-------以下为翻译------
+
+###The code is annotated in Chinese
+
+The source code has no Chinese comments and less English comments; I combed the code here and marked it with Chinese comments
+
+---------------------------------------以下为源readme.md------------------------------------------
+
 Reference:  ["Beginner’s Guide to Retrain GPT-2 (117M) to Generate Custom Text Content"](https://medium.com/@ngwaifoong92/beginners-guide-to-retrain-gpt-2-117m-to-generate-custom-text-content-8bb5363d8b7f)
 
 To retrain GPT-2 117M model on a custom text dataset:
