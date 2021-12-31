@@ -4,7 +4,7 @@ import fire
 import json
 import os
 import numpy as np
-import tensorflow.compat.v1 as tf
+import tensorflow as tf
 
 import model, sample, encoder
 
@@ -14,9 +14,9 @@ def interact_model(
     nsamples=1,
     batch_size=1,
     length=None,
-    temperature=1,
-    top_k=0,
-    top_p=1,
+    temperature=1,  # 随机度 越大越随机
+    top_k=0,  # 取第几个概率值
+    top_p=1,  #
     models_dir='models',
 ):
     """
@@ -44,12 +44,12 @@ def interact_model(
         batch_size = 1
     assert nsamples % batch_size == 0
 
-    enc = encoder.get_encoder(model_name, models_dir)
+    enc = encoder.get_encoder(model_name, models_dir)   # (encode, BPE)
     hparams = model.default_hparams()
     with open(os.path.join(models_dir, model_name, 'hparams.json')) as f:
-        hparams.override_from_dict(json.load(f))
+        hparams.override_from_dict(json.load(f))  # Hparams可以用于超参数调优
 
-    if length is None:
+    if length is None:  #  length 标记的数量
         length = hparams.n_ctx // 2
     elif length > hparams.n_ctx:
         raise ValueError("Can't get samples longer than window size: %s" % hparams.n_ctx)
@@ -65,8 +65,8 @@ def interact_model(
             temperature=temperature, top_k=top_k, top_p=top_p
         )
 
-        saver = tf.train.Saver()
-        ckpt = tf.train.latest_checkpoint(os.path.join(models_dir, model_name))
+        saver = tf.train.Saver()   # 保存和读取模型的
+        ckpt = tf.train.latest_checkpoint(os.path.join(models_dir, model_name))  # 读取模型
         saver.restore(sess, ckpt)
 
         while True:
@@ -74,12 +74,13 @@ def interact_model(
             while not raw_text:
                 print('Prompt should not be empty!')
                 raw_text = input("Model prompt >>> ")
-            context_tokens = enc.encode(raw_text)
+            context_tokens = enc.encode(raw_text)  # 文本编码
             generated = 0
             for _ in range(nsamples // batch_size):
                 out = sess.run(output, feed_dict={
                     context: [context_tokens for _ in range(batch_size)]
-                })[:, len(context_tokens):]
+                })   # 通过run绑定原有模型和现在的图
+                out = out[:, len(context_tokens):]
                 for i in range(batch_size):
                     generated += 1
                     text = enc.decode(out[i])
@@ -89,3 +90,4 @@ def interact_model(
 
 if __name__ == '__main__':
     fire.Fire(interact_model)
+
